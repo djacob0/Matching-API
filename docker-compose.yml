@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  matching-api:
+    build:
+      context: ./matching-api  # Path to your matching-api folder
+    container_name: matching-api
+    ports:
+      - "5001:5001"  # Expose port 5001 for matching-api
+    env_file:
+      - ./matching-api/.env   # Assuming .env for matching-api exists
+    volumes:
+      - ./matching-api:/app
+    restart: unless-stopped
+
+  users-api:
+    build:
+      context: ./users-api
+    container_name: users-api
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./users-api/.env
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
