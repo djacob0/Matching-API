@@ -8,7 +8,7 @@ const app = express();
 
 app.use(cors({
   origin: true,
-  methods: ['GET'],
+  methods: ['GET', 'POST'],
   allowedHeaders: [
     'RSBSASYSTEMGENERATEDNUMBER',
     'FIRSTNAME',

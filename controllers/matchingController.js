@@ -26,82 +26,228 @@ const matchByMultipleFields = async (req, res) => {
       });
     }
 
-    const queries = [];
-    const queryParams = [];
-
-    records.forEach((r, idx) => {
-      const conditions = [];
-      const params = [];
-
-      if (r.rsbsa_no) {
-        conditions.push(`rsbsa_no = ?`);
-        params.push(r.rsbsa_no);
-      }
-
-      if (r.first_name && r.surname) {
-        conditions.push(`first_name = ? AND surname = ?`);
-        params.push(r.first_name, r.surname);
-      }
-
-      if (r.middle_name) {
-        conditions.push(`middle_name = ?`);
-        params.push(r.middle_name);
-      }
-
-      if (r.ext_name) {
-        conditions.push(`ext_name = ?`);
-        params.push(r.ext_name);
-      }
-
-      if (r.mother_maiden_name) {
-        conditions.push(`mother_maiden_name = ?`);
-        params.push(r.mother_maiden_name);
-      }
-
-      if (r.sex) {
-        const genderCode = r.sex.startsWith("F") ? 2 : 1;
-        conditions.push(`sex = ?`);
-        params.push(genderCode);
-      }
-
-      if (conditions.length) {
-        queries.push(`SELECT * FROM vw_fims_rffa_intervention WHERE ${conditions.join(" AND ")} LIMIT 100`);
-        queryParams.push(...params);
-      }
-    });
-
-    if (!queries.length) {
-      return res.status(400).json({
-        success: false,
-        message: "No valid search criteria provided"
-      });
-    }
-
-    const finalQuery = queries.join(" UNION ALL ");
-
-    const [rows] = await pool.query(finalQuery, queryParams);
-
-    if (!rows.length) {
-      return res.status(404).json({
-        success: false,
-        message: "No matching records found"
-      });
-    }
-
     const results = {};
-    rows.forEach(row => {
-      const key = row.rsbsa_no || `${row.first_name}_${row.surname}`;
-      if (!results[key]) results[key] = [];
-      results[key].push(row);
-    });
+    const unmatchedRecords = [];
 
-    res.json({
-      success: true,
-      count: rows.length,
+    for (const [idx, record] of records.entries()) {
+      let dbRecords = [];
+      let fieldsToMatch = {};
+      let unmatchedFields = [];
+      
+      if (record.rsbsa_no) {
+        const [rsbsaResults] = await pool.query(
+          `SELECT * FROM vw_fims_rffa_intervention WHERE rsbsa_no = ?`, 
+          [record.rsbsa_no]
+        );
+        
+        if (rsbsaResults.length > 0) {
+          dbRecords = rsbsaResults;
+          
+          for (const dbRecord of dbRecords) {
+            unmatchedFields = [];
+            
+            if (record.first_name && dbRecord.first_name !== record.first_name) {
+              unmatchedFields.push({
+                field: 'first_name',
+                input: record.first_name,
+                db: dbRecord.first_name
+              });
+            }
+            
+            if (record.middle_name && dbRecord.middle_name !== record.middle_name) {
+              unmatchedFields.push({
+                field: 'middle_name',
+                input: record.middle_name,
+                db: dbRecord.middle_name
+              });
+            }
+            
+            // In the RSBSA-based matching loop, inside the for (const dbRecord of dbRecords) block
+            if (record.surname) {
+              if (dbRecord.surname !== record.surname) {
+                unmatchedFields.push({
+                  field: 'surname',
+                  input: record.surname,
+                  db: dbRecord.surname
+                });
+              }
+            } else if (dbRecord.surname) {
+              // If input surname is null but database has a surname, treat as mismatch
+              unmatchedFields.push({
+                field: 'surname',
+                input: null,
+                db: dbRecord.surname
+              });
+            }
+            
+            if (record.ext_name && dbRecord.ext_name !== record.ext_name) {
+              unmatchedFields.push({
+                field: 'ext_name',
+                input: record.ext_name,
+                db: dbRecord.ext_name
+              });
+            }
+            
+            if (record.sex) {
+              const genderCode = record.sex.startsWith("F") || record.sex.startsWith("f") ? 2 : 1;
+              if (dbRecord.sex !== genderCode) {
+                unmatchedFields.push({
+                  field: 'sex',
+                  input: record.sex,
+                  db: dbRecord.sex === 1 ? 'MALE' : 'FEMALE'
+                });
+              }
+            }
+            
+            if (record.mother_maiden_name && dbRecord.mother_maiden_name !== record.mother_maiden_name) {
+              unmatchedFields.push({
+                field: 'mother_maiden_name',
+                input: record.mother_maiden_name,
+                db: dbRecord.mother_maiden_name
+              });
+            }
+            
+            if (unmatchedFields.length === 0) {
+              const key = record.rsbsa_no;
+              if (!results[key]) results[key] = [];
+              results[key].push(dbRecord);
+              break;
+            }
+          }
+          
+          if (unmatchedFields.length > 0) {
+            unmatchedRecords.push({
+              recordIndex: idx,
+              recordData: record,
+              reason: 'RSBSA found but other fields do not match',
+              rsbsaExists: true,
+              unmatchedFields: unmatchedFields.map(f => ({ 
+                field: f.field, 
+                input: f.input,
+                db: f.db
+              }))
+            });
+          }
+        } else {
+          unmatchedRecords.push({
+            recordIndex: idx,
+            recordData: record,
+            reason: 'RSBSA number not found in system',
+            rsbsaExists: false,
+            unmatchedFields: []
+          });
+        }
+      } 
+      else if (record.first_name && record.surname) {
+        const [nameResults] = await pool.query(
+          `SELECT * FROM vw_fims_rffa_intervention 
+           WHERE LOWER(first_name) = LOWER(?) AND LOWER(surname) = LOWER(?)`, 
+          [record.first_name, record.surname]
+        );
+        
+        if (nameResults.length > 0) {
+          dbRecords = nameResults;
+
+          for (const dbRecord of dbRecords) {
+            unmatchedFields = [];
+            
+            if (record.middle_name && dbRecord.middle_name !== record.middle_name) {
+              unmatchedFields.push({
+                field: 'middle_name',
+                input: record.middle_name,
+                db: dbRecord.middle_name
+              });
+            }
+            
+            if (record.ext_name && dbRecord.ext_name !== record.ext_name) {
+              unmatchedFields.push({
+                field: 'ext_name',
+                input: record.ext_name,
+                db: dbRecord.ext_name
+              });
+            }
+            
+            if (record.sex) {
+              const genderCode = record.sex.startsWith("F") || record.sex.startsWith("f") ? 2 : 1;
+              if (dbRecord.sex !== genderCode) {
+                unmatchedFields.push({
+                  field: 'sex',
+                  input: record.sex,
+                  db: dbRecord.sex === 1 ? 'MALE' : 'FEMALE'
+                });
+              }
+            }
+            
+            if (record.mother_maiden_name && dbRecord.mother_maiden_name !== record.mother_maiden_name) {
+              unmatchedFields.push({
+                field: 'mother_maiden_name',
+                input: record.mother_maiden_name,
+                db: dbRecord.mother_maiden_name
+              });
+            }
+            
+            if (unmatchedFields.length === 0) {
+              const key = `${record.first_name}_${record.surname}`;
+              if (!results[key]) results[key] = [];
+              results[key].push(dbRecord);
+              break;
+            }
+          }
+
+          if (unmatchedFields.length > 0) {
+            unmatchedRecords.push({
+              recordIndex: idx,
+              recordData: record,
+              reason: 'Name found but other fields do not match',
+              nameExists: true,
+              unmatchedFields: unmatchedFields.map(f => ({ 
+                field: f.field, 
+                input: f.input,
+                db: f.db
+              }))
+            });
+          }
+        } else {
+          unmatchedRecords.push({
+            recordIndex: idx,
+            recordData: record,
+            reason: 'No record found with the provided name',
+            nameExists: false,
+            unmatchedFields: []
+          });
+        }
+      } else {
+        unmatchedRecords.push({
+          recordIndex: idx,
+          recordData: record,
+          reason: 'Insufficient search criteria provided',
+          unmatchedFields: []
+        });
+      }
+    }
+
+    const response = {
+      success: Object.keys(results).length > 0,
+      count: Object.values(results).flat().length,
       foundCount: Object.keys(results).length,
       requestedCount: records.length,
       data: results
-    });
+    };
+
+    if (unmatchedRecords.length > 0) {
+      response.unmatchedRecords = unmatchedRecords;
+      response.unmatchedCount = unmatchedRecords.length;
+    }
+
+    if (Object.keys(results).length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No matching records found",
+        unmatchedRecords: unmatchedRecords
+      });
+    }
+
+    res.json(response);
 
   } catch (error) {
     console.error("[Matching Controller Error]", error);
