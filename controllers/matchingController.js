@@ -62,7 +62,6 @@ const matchByMultipleFields = async (req, res) => {
               });
             }
             
-            // In the RSBSA-based matching loop, inside the for (const dbRecord of dbRecords) block
             if (record.surname) {
               if (dbRecord.surname !== record.surname) {
                 unmatchedFields.push({
@@ -72,7 +71,6 @@ const matchByMultipleFields = async (req, res) => {
                 });
               }
             } else if (dbRecord.surname) {
-              // If input surname is null but database has a surname, treat as mismatch
               unmatchedFields.push({
                 field: 'surname',
                 input: null,
